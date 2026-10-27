@@ -17,6 +17,10 @@ wheel2pad — превращает руль (Artplays V-1200 Vibro и подоб
   python wheel2pad.py --show        эмуляция + строка с текущими значениями
   python wheel2pad.py --monitor     просто показать «сырые» оси/кнопки руля
   python wheel2pad.py --list        список устройств
+
+Во время работы в окно можно ввести команду и нажать Enter:
+  R — перенастроить руль, H — путь для HidHide (копируется в буфер обмена).
+Поэтому пользователю хватает одного wheel2pad.exe — без дополнительных .bat.
 """
 import argparse
 import json
@@ -56,15 +60,37 @@ def real_exe():
     return sys.executable
 
 
+def copy_to_clipboard(text):
+    """Кладёт текст в буфер обмена Windows. Возвращает True, если получилось.
+
+    clip.exe правильно понимает только UTF-16 с BOM: в другой кодировке
+    кириллица в пути (например, в имени пользователя) превратится в «кракозябры».
+    """
+    if sys.platform != "win32":
+        return False
+    import subprocess
+    try:
+        subprocess.run(["clip"], input=("﻿" + text).encode("utf-16-le"), check=False)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def hidhide_hint():
+    """Путь, который нужно разрешить в HidHide; заодно копирует его в буфер,
+    чтобы в окне выбора файла HidHide хватило Ctrl+V и Enter."""
+    path = real_exe()
+    copied = copy_to_clipboard(path)
+    return ("  • если установлен HidHide — в его списке «Applications» должен быть файл:\n"
+            f"      {path}\n"
+            + ("    (путь уже скопирован: в HidHide нажмите «+», затем Ctrl+V и Enter)"
+               if copied else ""))
+
+
 def not_found_hint():
     return ("\nПроверьте:\n"
             "  • руль подключён по USB (попробуйте другой порт);\n"
-            "  • если установлен HidHide — в его списке «Applications» должен быть файл:\n"
-            f"      {real_exe()}\n"
-            f"    (его можно скопировать, запустив {HIDHIDE_HELPER}).")
-
-
-HIDHIDE_HELPER = "«Путь для HidHide.bat»" if FROZEN else "hidhide_path.bat"
+            + hidhide_hint())
 
 
 # --------------------------------------------------------------------------
@@ -191,6 +217,46 @@ def wait_enter(prompt, on_tick=None):
 
 
 # --------------------------------------------------------------------------
+# Команды во время работы (вместо отдельных .bat-файлов)
+# --------------------------------------------------------------------------
+RECALIBRATE = "recalibrate"
+
+COMMANDS_HELP = ("Команды: щёлкните по этому окну, введите букву и нажмите Enter.\n"
+                 "  R — перенастроить руль\n"
+                 "  H — путь для HidHide (сразу копируется в буфер обмена)")
+
+# Вторая буква в каждой паре — та же клавиша в русской раскладке
+# (R → «к», H → «р»), чтобы не приходилось переключать язык.
+_CMD_RECALIBRATE = {"r", "к"}
+_CMD_HIDHIDE = {"h", "р"}
+
+
+def poll_command():
+    """Проверяет, не ввели ли команду, не останавливая опрос руля.
+
+    Возвращает RECALIBRATE, если просят перенастроить руль. Путь для HidHide
+    печатает сама, а на любой другой ввод (в том числе пустой Enter)
+    напоминает список команд.
+    """
+    try:
+        line = _lines.get_nowait()
+    except queue.Empty:
+        return None
+    cmd = line.strip().lower()
+    if cmd in _CMD_RECALIBRATE:
+        return RECALIBRATE
+    if cmd in _CMD_HIDHIDE:
+        path = real_exe()
+        copied = copy_to_clipboard(path)
+        print(f"\nДобавьте в HidHide (вкладка «Applications»):\n  {path}")
+        if copied:
+            print("Путь уже скопирован: в HidHide нажмите «+», затем Ctrl+V и Enter.")
+        return None
+    print("\n" + COMMANDS_HELP)
+    return None
+
+
+# --------------------------------------------------------------------------
 # Устройства
 # --------------------------------------------------------------------------
 def init_sdl():
@@ -229,10 +295,27 @@ def find_device(cfg):
     return None
 
 
-def choose_device():
+def choose_device(prefer=None):
+    """Выбирает руль для калибровки.
+
+    prefer — прежний конфиг: если тот же руль подключён, берём его без вопросов.
+    Это важно при перенастройке командой R: в этот момент в системе ещё может
+    числиться наш собственный виртуальный геймпад, и без этого пришлось бы
+    выбирать из списка.
+    """
+    j = find_device(prefer) if prefer else None
+    if j is not None:
+        print("Руль:", describe(j))
+        return j
     joys = all_joysticks()
     if not joys:
-        sys.exit("Не найдено ни одного игрового устройства." + not_found_hint())
+        # Не выходим: в режиме одного exe проще дождаться руля, чем объяснять,
+        # что программу надо перезапустить.
+        print("Не найдено ни одного игрового устройства. Жду подключения руля…" + not_found_hint())
+        while not joys:
+            pygame.event.get()  # SDL обновляет список устройств при обработке событий
+            time.sleep(0.3)
+            joys = all_joysticks()
     if len(joys) == 1:
         print("Найдено устройство:", describe(joys[0]))
         return joys[0]
@@ -331,7 +414,7 @@ def wait_all_released(j):
 
 
 def calibrate(old_cfg=None):
-    j = choose_device()
+    j = choose_device(prefer=old_cfg)
     j.init()
     if j.get_numaxes() < 2:
         sys.exit("У устройства меньше двух осей — похоже, выбран не руль.")
@@ -470,7 +553,41 @@ def safe_axis(j, idx):
 # --------------------------------------------------------------------------
 # Эмуляция
 # --------------------------------------------------------------------------
+def wait_for_wheel(cfg):
+    """Ждёт, пока появится руль из конфига. Вернёт руль или RECALIBRATE.
+
+    Руль может не находиться по двум причинам: его ещё не подключили
+    (тогда просто ждём) или у него сменился GUID — подключили другой руль
+    или переключили режим D-Input/X-Input. Во втором случае поможет только
+    перенастройка, поэтому команды R/H работают и во время ожидания.
+    """
+    print("Руль не найден, жду подключения…" + not_found_hint() +
+          "\n  • если подключили другой руль или переключили его режим — введите R и нажмите Enter.")
+    while True:
+        pygame.event.get()  # без этого SDL не узнает о новом устройстве
+        if poll_command() == RECALIBRATE:
+            return RECALIBRATE
+        j = find_device(cfg)
+        if j is not None:
+            print("Руль найден.")
+            return j
+        time.sleep(0.2)
+
+
 def run(cfg, show=False):
+    """Эмуляция. Возвращает RECALIBRATE, если пользователь попросил перенастройку."""
+    s = dict(DEFAULT_SETTINGS)
+    s.update(cfg.get("settings", {}))
+
+    # Руль ищем ДО создания виртуального геймпада: если понадобится
+    # перенастройка, в списке устройств не будет лишнего «Xbox 360 Controller».
+    j = find_device(cfg)
+    if j is None:
+        j = wait_for_wheel(cfg)
+        if j == RECALIBRATE:
+            return RECALIBRATE
+    j.init()
+
     try:
         import vgamepad as vg
         pad = vg.VX360Gamepad()
@@ -480,16 +597,6 @@ def run(cfg, show=False):
         offer_vigembus_install(e)
     except Exception as e:  # noqa: BLE001  (vgamepad падает, если нет драйвера)
         offer_vigembus_install(e)
-
-    s = dict(DEFAULT_SETTINGS)
-    s.update(cfg.get("settings", {}))
-
-    j = find_device(cfg)
-    if j is None:
-        sys.exit("Руль не найден." + not_found_hint() +
-                 "\n  • если подключили другой руль или сменили его режим — запустите "
-                 + ("«Перенастроить руль.bat»." if FROZEN else "calibrate.bat."))
-    j.init()
     joy_id = j.get_instance_id()
 
     xbtn = {name: getattr(vg.XUSB_BUTTON, XUSB_NAMES[name]) for name in XUSB_NAMES}
@@ -506,16 +613,23 @@ def run(cfg, show=False):
             print("Вибрация недоступна:", e)
 
     print(f"Эмуляция запущена: {j.get_name()} → виртуальный Xbox 360.")
-    print("Запускайте игру. Остановить — Ctrl+C (окно можно свернуть).")
+    print("Запускайте игру. Окно можно свернуть; остановить — закрыть окно или Ctrl+C.")
+    print(COMMANDS_HELP)
 
     period = 1.0 / max(int(s["rate_hz"]), 30)
     last_show = last_rumble = 0.0
     rumble_warned = False
     held = set()
+    result = None
 
     try:
         while True:
             t0 = time.perf_counter()
+
+            if poll_command() == RECALIBRATE:
+                print("\nПерехожу к перенастройке руля.")
+                result = RECALIBRATE
+                break
 
             for e in pygame.event.get():
                 if e.type == pygame.JOYDEVICEREMOVED and e.instance_id == joy_id:
@@ -591,6 +705,9 @@ def run(cfg, show=False):
                 j.stop_rumble()
         except Exception:  # noqa: BLE001
             pass
+    # После выхода из функции объект pad удаляется, и vgamepad сам отключает
+    # виртуальный геймпад — на время калибровки его в системе не будет.
+    return result
 
 
 def monitor():
@@ -627,12 +744,7 @@ def main():
     if args.where:
         path = real_exe()
         print(path)
-        if sys.platform == "win32":
-            import subprocess
-            try:  # clip.exe правильно понимает UTF-16 с BOM (кириллица в пути не сломается)
-                subprocess.run(["clip"], input=("﻿" + path).encode("utf-16-le"), check=False)
-            except Exception:  # noqa: BLE001
-                pass
+        copy_to_clipboard(path)
         return
 
     init_sdl()
@@ -644,10 +756,16 @@ def main():
         return
 
     cfg = load_cfg()
-    if args.calibrate or cfg is None:
-        cfg = calibrate(cfg)
-        wait_enter("\nНажмите Enter, чтобы сразу запустить эмуляцию (или закройте окно)… ")
-    run(cfg, show=args.show)
+    need_calibration = args.calibrate or cfg is None
+    # Цикл нужен для команды R: калибровка → эмуляция → (R) → калибровка → …
+    # без перезапуска программы.
+    while True:
+        if need_calibration:
+            cfg = calibrate(cfg)
+            wait_enter("\nНажмите Enter, чтобы сразу запустить эмуляцию (или закройте окно)… ")
+        if run(cfg, show=args.show) != RECALIBRATE:
+            return
+        need_calibration = True
 
 
 if __name__ == "__main__":

@@ -13,23 +13,25 @@ echo [1/3] Ставлю PyInstaller...
 ".venv\Scripts\python" -m pip install --upgrade pyinstaller
 if errorlevel 1 goto fail
 
+rem --onefile: всё (Python, pygame, vgamepad с установщиком ViGEmBus) внутри одного exe.
+rem Путь к иконке абсолютный: с --specpath относительные пути PyInstaller ищет от папки build.
 echo [2/3] Собираю wheel2pad.exe (1-2 минуты)...
 ".venv\Scripts\python" -m PyInstaller --noconfirm --clean --onefile --console ^
-    --name wheel2pad --collect-all vgamepad --exclude-module vgamepad.lin ^
+    --name wheel2pad --icon "%~dp0assets\wheel2pad.ico" ^
+    --collect-all vgamepad --exclude-module vgamepad.lin ^
     --distpath build\dist --workpath build\work --specpath build wheel2pad.py
 if errorlevel 1 goto fail
 
-echo [3/3] Собираю папку для сестры...
+rem Отдаётся один файл: команды R/H заменили прежние bat-ярлыки,
+rem а инструкция передаётся отдельно (в репозитории её нет).
+echo [3/3] Кладу exe в папку release...
 if exist release rmdir /s /q release
-mkdir release\Wheel2Pad
-copy /y build\dist\wheel2pad.exe release\Wheel2Pad\ >nul
-copy /y release_files\*.* release\Wheel2Pad\ >nul
-powershell -NoProfile -Command "Compress-Archive -Path 'release\Wheel2Pad' -DestinationPath 'release\Wheel2Pad.zip' -Force"
+mkdir release
+copy /y build\dist\wheel2pad.exe release\ >nul
 
 echo.
 echo Готово!
-echo   Папка: release\Wheel2Pad
-echo   Архив: release\Wheel2Pad.zip  ^<- его и отдавайте
+echo   Файл: release\wheel2pad.exe  ^<- его и отдавайте (инструкцию - отдельно)
 explorer release
 pause
 exit /b

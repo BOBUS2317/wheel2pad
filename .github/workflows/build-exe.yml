@@ -1,9 +1,16 @@
 name: Build wheel2pad.exe
 
+# Результат — один файл wheel2pad.exe, как у x360ce:
+#   • ручной запуск (кнопка "Run workflow") → артефакт Wheel2Pad
+#     (GitHub всегда отдаёт артефакты zip-архивом, внутри — только exe);
+#   • тег вида v1.0 → релиз на странице Releases с exe без архива.
 on:
   workflow_dispatch:        # кнопка "Run workflow" во вкладке Actions
   push:
     tags: ["v*"]            # или пушнуть тег, например v1.0
+
+permissions:
+  contents: write           # нужно, чтобы создать релиз и приложить к нему exe
 
 jobs:
   build:
@@ -22,20 +29,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # Путь к иконке абсолютный: с --specpath относительные пути PyInstaller ищет от папки build.
       - name: Build exe
         run: >
           python -m PyInstaller --noconfirm --clean --onefile --console
-          --name wheel2pad --collect-all vgamepad --exclude-module vgamepad.lin
+          --name wheel2pad --icon "${{ github.workspace }}\assets\wheel2pad.ico"
+          --collect-all vgamepad --exclude-module vgamepad.lin
           --distpath build/dist --workpath build/work --specpath build wheel2pad.py
 
-      - name: Assemble folder for the end user
+      # Установщик ViGEmBus должен оказаться внутри exe — иначе программа не сможет
+      # предложить поставить драйвер. Проверяем по содержимому собранного архива.
+      - name: Check that ViGEmBus installer is bundled
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force release/Wheel2Pad | Out-Null
-          Copy-Item build/dist/wheel2pad.exe release/Wheel2Pad/
-          Copy-Item release_files/* release/Wheel2Pad/
+          $toc = pyi-archive_viewer --list build/dist/wheel2pad.exe
+          if (-not ($toc | Select-String 'ViGEmBusSetup_x64.msi')) { throw 'ViGEmBusSetup_x64.msi не попал в exe' }
+          Write-Host 'ViGEmBusSetup_x64.msi найден внутри exe'
 
       - uses: actions/upload-artifact@v4
         with:
           name: Wheel2Pad
-          path: release/Wheel2Pad
+          path: build/dist/wheel2pad.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/dist/wheel2pad.exe
+          generate_release_notes: true

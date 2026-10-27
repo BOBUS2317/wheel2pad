@@ -6,3 +6,8 @@ release_files/*.txt text eol=crlf
 
 *.py text eol=lf
 *.yml text eol=lf
+
+# Иконка и картинки — двоичные, переводы строк в них не трогать
+*.ico binary
+*.gif binary
+*.png binary
