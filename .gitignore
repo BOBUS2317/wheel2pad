@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Сборка PyInstaller (build_exe.bat / Actions)
+build/
+dist/
+release/
+*.spec
+
+# Личная калибровка руля — у каждого своя
+wheel2pad.json
+
+# Архивы (исходный архив проекта, Wheel2Pad.zip)
+*.zip
+
+# Контекст для Claude Code — только локально
+CLAUDE.md

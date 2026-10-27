@@ -1,0 +1,8 @@
+* text=auto
+
+# cmd.exe и Блокнот ждут CRLF — держим его при любом checkout (в том числе на CI)
+*.bat text eol=crlf
+release_files/*.txt text eol=crlf
+
+*.py text eol=lf
+*.yml text eol=lf

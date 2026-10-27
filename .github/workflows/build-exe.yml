@@ -1,0 +1,41 @@
+name: Build wheel2pad.exe
+
+on:
+  workflow_dispatch:        # кнопка "Run workflow" во вкладке Actions
+  push:
+    tags: ["v*"]            # или пушнуть тег, например v1.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        env:
+          VGAMEPAD_SKIP_VIGEMBUS_INSTALL: "true"   # не запускать установщик драйвера на CI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build exe
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --console
+          --name wheel2pad --collect-all vgamepad --exclude-module vgamepad.lin
+          --distpath build/dist --workpath build/work --specpath build wheel2pad.py
+
+      - name: Assemble folder for the end user
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release/Wheel2Pad | Out-Null
+          Copy-Item build/dist/wheel2pad.exe release/Wheel2Pad/
+          Copy-Item release_files/* release/Wheel2Pad/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wheel2Pad
+          path: release/Wheel2Pad
