@@ -17,3 +17,6 @@ wheel2pad.json
 
 # Контекст для Claude Code — только локально
 CLAUDE.md
+
+# Инструкция для сестры — хранится только локально (build_exe.bat всё равно кладёт её рядом с exe)
+release_files/ИНСТРУКЦИЯ.txt

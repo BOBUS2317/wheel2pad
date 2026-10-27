@@ -266,12 +266,19 @@ def sample_rest(j, secs=0.8):
     return [a / max(n, 1) for a in acc]
 
 
-def capture_extremes(j, base, prompt):
-    """Запоминает для каждой оси значение, дальше всего ушедшее от покоя."""
+def capture_extremes(j, base, prompt, opposite=None):
+    """Запоминает для каждой оси значение, дальше всего ушедшее от покоя.
+
+    opposite — уже снятые крайние значения: тогда засчитывается только движение
+    в другую сторону от покоя. Иначе при повороте «от левого упора к правому»
+    левый упор (он тоже ±1.0) так и остался бы самым дальним.
+    """
     ext = list(base)
 
     def tick():
         for i, v in enumerate(read_axes(j)):
+            if opposite is not None and (v - base[i]) * (opposite[i] - base[i]) > 0:
+                continue
             if abs(v - base[i]) > abs(ext[i] - base[i]):
                 ext[i] = v
 
@@ -336,13 +343,15 @@ def calibrate(old_cfg=None):
     base = sample_rest(j)
 
     left = capture_extremes(j, base, "2) Поверните руль ДО УПОРА ВЛЕВО и, не отпуская, нажмите Enter… ")
-    right = capture_extremes(j, base, "3) Поверните руль ДО УПОРА ВПРАВО и, не отпуская, нажмите Enter… ")
+    right = capture_extremes(j, base, "3) Поверните руль ДО УПОРА ВПРАВО и, не отпуская, нажмите Enter… ",
+                             opposite=left)
     score = [abs(left[i] - base[i]) + abs(right[i] - base[i]) for i in range(len(base))]
     s_axis = max(range(len(score)), key=score.__getitem__)
     if score[s_axis] < 0.5:
         sys.exit("Не увидел поворота руля. Запустите калибровку ещё раз.")
-    if (left[s_axis] - base[s_axis]) * (right[s_axis] - base[s_axis]) > 0:
-        print("  ! Влево и вправо ось ушла в одну сторону — проверьте, что поворачивали в обе стороны.")
+    if min(abs(left[s_axis] - base[s_axis]), abs(right[s_axis] - base[s_axis])) < 0.2:
+        sys.exit("Руль повернули только в одну сторону. Запустите калибровку ещё раз "
+                 "и поверните его до упора и влево, и вправо.")
     steer = {"axis": s_axis, "center": base[s_axis], "left": left[s_axis], "right": right[s_axis]}
     print(f"  руль: ось #{s_axis}")
     wait_enter("   Верните руль в центр и нажмите Enter… ")
@@ -651,6 +660,12 @@ if __name__ == "__main__":
             exit_code = 1
         else:
             exit_code = e.code or 0
+    except KeyboardInterrupt:
+        # Ctrl+C посреди калибровки: KeyboardInterrupt не наследуется от Exception,
+        # поэтому без этой ветки пользователь увидел бы страшный трейсбек,
+        # а окно exe закрылось бы сразу, не дав ничего прочитать.
+        print("\nОстановлено.")
+        exit_code = 1
     except Exception:  # noqa: BLE001
         import traceback
         traceback.print_exc()

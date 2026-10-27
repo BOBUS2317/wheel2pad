@@ -11,11 +11,14 @@ echo   Нужен интернет. Окно не закрывайте.
 echo ============================================================
 echo.
 
+rem Подходит только официальный Python для Windows (собран MSVC, в sys.version есть "MSC").
+rem Сборки MSYS2/MinGW создают venv без .venv\Scripts\python.exe, и pygame-ce под них не ставится.
+rem Заглушка из Microsoft Store (WindowsApps\python.exe) на -c вернёт ошибку и тоже отсеется.
 set "PY="
-py -3 --version >nul 2>&1
+py -3 -c "import sys; sys.exit(0 if 'MSC' in sys.version else 1)" >nul 2>&1
 if not errorlevel 1 set "PY=py -3"
 if defined PY goto have_python
-python --version >nul 2>&1
+python -c "import sys; sys.exit(0 if 'MSC' in sys.version else 1)" >nul 2>&1
 if not errorlevel 1 set "PY=python"
 if defined PY goto have_python
 
