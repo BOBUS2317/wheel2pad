@@ -12,15 +12,16 @@ wheel2pad — превращает руль (Artplays V-1200 Vibro и подоб
   Вибрация из игры -> вибромотор руля (если руль это поддерживает)
 
 Запуск:
-  python wheel2pad.py --calibrate   калибровка и назначение кнопок
-  python wheel2pad.py               эмуляция (если конфига нет — сначала калибровка)
-  python wheel2pad.py --show        эмуляция + строка с текущими значениями
+  python wheel2pad.py               окно программы (wheel2pad_gui.py): вкладка
+                                    «Работа» — калибровка и эмуляция, вкладка
+                                    «Настройка кнопок» — переназначение и живой просмотр
+  python wheel2pad.py --calibrate   то же, но сначала заново откалибровать руль
+  python wheel2pad.py --console     по-старому, в консоли (только через Python)
   python wheel2pad.py --monitor     просто показать «сырые» оси/кнопки руля
   python wheel2pad.py --list        список устройств
 
-Во время работы в окно можно ввести команду и нажать Enter:
-  R — перенастроить руль, H — путь для HidHide (копируется в буфер обмена).
-Поэтому пользователю хватает одного wheel2pad.exe — без дополнительных .bat.
+Работа с рулём (калибровка и эмуляция) идёт в фоновом потоке, окно — в главном;
+связывает их Bridge. Пользователю хватает одного wheel2pad.exe — без .bat и консоли.
 """
 import argparse
 import json
@@ -37,10 +38,32 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame  # noqa: E402
 
+VERSION = "1.2"
 FROZEN = getattr(sys, "frozen", False)  # True, когда запущено из wheel2pad.exe
 # Настройки храним рядом с exe (или рядом со скриптом), а не во временной папке.
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
-CONFIG_PATH = APP_DIR / "wheel2pad.json"
+
+
+def pick_config_path():
+    """Где лежит wheel2pad.json. Обычно — рядом с exe (как x360ce.ini у x360ce).
+    Но если exe положили туда, куда Windows не даёт писать (Program Files и т. п.),
+    настройки не сохранились бы — тогда берём %LOCALAPPDATA%\\wheel2pad."""
+    near = APP_DIR / "wheel2pad.json"
+    alt = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "wheel2pad" / "wheel2pad.json"
+    if near.exists():
+        return near
+    if alt.exists():
+        return alt
+    try:
+        probe = APP_DIR / ".wheel2pad_write_test"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return near
+    except OSError:
+        return alt
+
+
+CONFIG_PATH = pick_config_path()
 
 
 def real_exe():
@@ -70,7 +93,10 @@ def copy_to_clipboard(text):
         return False
     import subprocess
     try:
-        subprocess.run(["clip"], input=("﻿" + text).encode("utf-16-le"), check=False)
+        # CREATE_NO_WINDOW: у оконного exe нет своей консоли, и без этого флага
+        # на экране мелькало бы чёрное окно clip.exe.
+        subprocess.run(["clip"], input=("﻿" + text).encode("utf-16-le"), check=False,
+                       creationflags=0x08000000)
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -95,13 +121,18 @@ MODE_HINT = ("  • если на руле зажимали кнопку MODE �
 # А если калибровали в D-Input, то после переподключения USB руль как раз
 # в X-Input — тогда наоборот, нужно зажать MODE.
 DINPUT_HINT = ("  • настройки сделаны для режима D-Input, а руль после подключения USB всегда\n"
-               "    в X-Input — зажмите на руле MODE на 3 секунды (или введите R и\n"
-               "    откалибруйте руль в обычном режиме);\n")
+               "    в X-Input — зажмите на руле MODE на 3 секунды (или {r}\n"
+               "    и откалибруйте руль в обычном режиме);\n")
+
+
+def r_hint():
+    """Как попросить перекалибровку: в окне — кнопкой, в консоли — буквой R."""
+    return "нажмите «Перекалибровать руль»" if BRIDGE else "введите R и нажмите Enter"
 
 
 def mode_hint(cfg):
     dev = (cfg or {}).get("device", {})
-    return DINPUT_HINT if dev.get("name") == ARTPLAYS_DINPUT else MODE_HINT
+    return DINPUT_HINT.format(r=r_hint()) if dev.get("name") == ARTPLAYS_DINPUT else MODE_HINT
 
 
 def not_found_hint(cfg=None):
@@ -217,7 +248,11 @@ def _stdin_reader():
             time.sleep(0.2)
 
 
-threading.Thread(target=_stdin_reader, daemon=True).start()
+def start_stdin_reader():
+    """Только для консольного режима. В окне ответы приходят из поля ввода
+    вкладки «Работа», а у оконного exe клавиатуры-консоли нет вовсе:
+    input() падал бы, и каждые 0,2 с в очередь сыпались бы пустые «Enter»."""
+    threading.Thread(target=_stdin_reader, daemon=True).start()
 
 
 def _drain_lines():
@@ -251,9 +286,91 @@ RECALIBRATE = "recalibrate"
 EDIT = "edit"
 
 COMMANDS_HELP = ("Команды: щёлкните по этому окну, введите букву и нажмите Enter.\n"
-                 "  S — окно кнопок: что приходит с руля, что видит игра, переназначение\n"
                  "  R — перенастроить руль\n"
                  "  H — путь для HidHide (сразу копируется в буфер обмена)")
+GUI_HELP = ("Кнопки внизу: «Перекалибровать руль», «Путь для HidHide». Кнопки руля и\n"
+            "чувствительность — на вкладке «Настройка кнопок».")
+
+
+def commands_help():
+    return GUI_HELP if BRIDGE else COMMANDS_HELP
+
+
+# --------------------------------------------------------------------------
+# Связь с окном программы
+# --------------------------------------------------------------------------
+class Bridge:
+    """Связь рабочего потока (руль, калибровка, эмуляция) с окном (tkinter).
+
+    tkinter можно трогать только из главного потока, а pygame удобнее держать
+    целиком в одном рабочем — поэтому они не зовут друг друга напрямую:
+      • рабочий поток публикует снимок руля (оси, кнопки, что ушло в игру),
+        события руля и своё состояние; окно читает их по таймеру;
+      • окно кладёт правки конфига в new_cfg (эмуляция подхватывает их сразу),
+        а то, что требует самого руля (раскладка SDL для «Авто»), — в submit().
+    """
+
+    def __init__(self):
+        import collections
+        self.snap = None              # снимок руля или None, если руля нет
+        self.events = collections.deque(maxlen=256)  # события руля для «Нажать»
+        self.cfg = None               # конфиг эмуляции (копия для окна)
+        self.cfg_version = 0          # растёт после каждой калибровки
+        self.new_cfg = None           # правки из окна — применить в эмуляции
+        self.state = ("start", "Запуск…")
+        self.wanted = None            # какой руль ждём (имя из конфига)
+        self.other_mode = None        # подключён тот же Artplays, но в другом режиме
+        self.show_settings = False    # окну: переключиться на вкладку настройки
+        self.stop = threading.Event()  # окно закрывают — эмуляции пора закругляться
+        self._requests = queue.Queue()
+        self.results = queue.Queue()  # (callback, результат) — вызвать в главном потоке
+        self._last_pub = 0.0
+
+    # ---- рабочий поток
+    def set_state(self, code, text):
+        self.state = (code, text)
+
+    def set_cfg(self, cfg):
+        import copy
+        self.cfg = copy.deepcopy(cfg)
+        self.cfg_version += 1
+
+    def take_new_cfg(self):
+        cfg, self.new_cfg = self.new_cfg, None
+        return cfg
+
+    def publish(self, j, out):
+        now = time.perf_counter()
+        if now - self._last_pub < 0.005:  # 200 раз в секунду окну за глаза
+            return
+        self._last_pub = now
+        self.snap = {
+            "name": j.get_name(), "instance_id": j.get_instance_id(),
+            "axes": read_axes(j),
+            "buttons": [j.get_button(b) for b in range(j.get_numbuttons())],
+            "hats": [j.get_hat(h) for h in range(j.get_numhats())],
+            "out": out,
+        }
+
+    def serve(self, j):
+        while True:
+            try:
+                fn, cb = self._requests.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                res = fn(j)
+            except Exception as e:  # noqa: BLE001
+                res = e
+            self.results.put((cb, res))
+
+    # ---- главный поток (окно)
+    def submit(self, fn, cb):
+        """Выполнить fn(руль) в рабочем потоке, потом cb(результат) — в окне."""
+        self._requests.put((fn, cb))
+
+
+BRIDGE = None  # Bridge, когда работает окно; None — консольный режим и тесты
 
 # Вторая буква в каждой паре — та же клавиша в русской раскладке
 # (R → «к», H → «р», S → «ы»), чтобы не приходилось переключать язык.
@@ -285,7 +402,7 @@ def poll_command():
         if copied:
             print("Путь уже скопирован: в HidHide нажмите «+», затем Ctrl+V и Enter.")
         return None
-    print("\n" + COMMANDS_HELP)
+    print("\n" + commands_help())
     return None
 
 
@@ -702,10 +819,14 @@ def auto_buttons(j, cfg, preset="pad"):
 
 
 def save_cfg(cfg):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)  # для запасного места в LOCALAPPDATA
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def calibrate(old_cfg=None):
+    if BRIDGE:
+        BRIDGE.snap = None
+        BRIDGE.set_state("calibrating", "Калибровка руля — следуйте шагам ниже")
     j = offer_mode_choice(choose_device(prefer=old_cfg))
     if j.get_numaxes() < 2:
         sys.exit("У устройства меньше двух осей — похоже, выбран не руль.")
@@ -890,20 +1011,6 @@ def apply_to_pad(pad, xbtn, out, held):
     return set(want)
 
 
-def open_editor(j, cfg, on_tick=None):
-    """Окно кнопок (wheel2pad_gui.py). Вернёт (конфиг, отключили_ли_руль).
-
-    Если окно открыть не удалось (нет tkinter и т. п.) — честно говорим об этом
-    и возвращаем конфиг как был: работать можно и без окна.
-    """
-    try:
-        import wheel2pad_gui
-    except Exception as e:  # noqa: BLE001
-        print(f"\nОкно кнопок недоступно: {e}")
-        return cfg, False
-    return wheel2pad_gui.edit(sys.modules[__name__], j, cfg, on_tick)
-
-
 # --------------------------------------------------------------------------
 # Вибрация в обход SDL
 # --------------------------------------------------------------------------
@@ -992,14 +1099,36 @@ def wait_for_wheel(cfg):
     """
     print("Руль не найден, жду подключения…" + not_found_hint(cfg) +
           "\n  • если подключили другой руль или хотите работать в другом режиме руля —\n"
-          "    введите R и нажмите Enter.")
+          f"    {r_hint()}.")
+    want = (cfg or {}).get("device", {}).get("name")
+    if BRIDGE:
+        BRIDGE.snap = None
+        BRIDGE.wanted, BRIDGE.other_mode = want, None
+        BRIDGE.set_state("waiting", "Жду руль — подключите его (подробности — в консоли)")
+    told = None
     while True:
+        if BRIDGE and BRIDGE.stop.is_set():
+            return None
         pygame.event.get()  # без этого SDL не узнает о новом устройстве
         cmd = poll_command()
         if cmd == RECALIBRATE:
             return RECALIBRATE
         if cmd == EDIT:
             print("\nСначала подключите руль — окно кнопок показывает его в реальном времени.")
+        # Тот же Artplays, но в другом режиме? Так бывает чаще всего (MODE или
+        # переподключение USB) — скажем прямо, а не общими словами.
+        other = next((c.get_name() for c in all_joysticks()
+                      if c.get_name() in MODE_NOTES and c.get_name() != want), None)
+        if want in MODE_NOTES and other != told:
+            told = other
+            if BRIDGE:
+                BRIDGE.other_mode = other
+            if other:
+                fix = ("выдерните USB руля и вставьте обратно — он вернётся в X-Input"
+                       if wheel_mode(want) == "X-Input" else "зажмите на руле MODE на 3 секунды")
+                print(f"\nРуль Artplays подключён, но сейчас он в режиме {wheel_mode(other)}, а настройки "
+                      f"сделаны для {wheel_mode(want)}.\n  • {fix};\n  • или {r_hint()}, чтобы "
+                      f"настроить руль в режиме {wheel_mode(other)}.")
         j = find_device(cfg)
         if j is not None:
             print("Руль найден.")
@@ -1016,8 +1145,8 @@ def run(cfg, show=False):
     j = find_device(cfg)
     if j is None:
         j = wait_for_wheel(cfg)
-        if j == RECALIBRATE:
-            return RECALIBRATE
+        if j is None or j == RECALIBRATE:  # None — окно закрыли, пока ждали руль
+            return j
 
     try:
         import vgamepad as vg
@@ -1046,8 +1175,13 @@ def run(cfg, show=False):
             print("Вибрация недоступна:", e)
 
     print(f"Эмуляция запущена: {device_title(j)} → виртуальный Xbox 360.")
-    print("Запускайте игру. Окно можно свернуть; остановить — закрыть окно или Ctrl+C.")
-    print(COMMANDS_HELP)
+    print("Запускайте игру. Окно можно свернуть; остановить — закрыть окно"
+          + ("." if BRIDGE else " или Ctrl+C."))
+    print(commands_help())
+    if BRIDGE:
+        BRIDGE.set_cfg(cfg)
+        BRIDGE.other_mode = None
+        BRIDGE.set_state("emulating", f"Работает: {device_title(j)} → виртуальный Xbox 360")
 
     period = 1.0 / max(int(s["rate_hz"]), 30)
     last_show = last_rumble = 0.0
@@ -1064,33 +1198,33 @@ def run(cfg, show=False):
                 print("\nПерехожу к перенастройке руля.")
                 result = RECALIBRATE
                 break
-            if cmd == EDIT and j is None:
-                print("\nСначала подключите руль — окно кнопок показывает его в реальном времени.")
-            elif cmd == EDIT:
-                print("\nОткрываю окно кнопок. Эмуляция при этом продолжается — "
-                      "изменения можно сразу проверять в игре.")
-                box = {"held": held}
+            if cmd == EDIT:
+                if BRIDGE:
+                    BRIDGE.show_settings = True
+                else:
+                    print("\nОкно кнопок есть в обычном (оконном) режиме программы — без --console.")
 
-                def push(out):
-                    box["held"] = apply_to_pad(pad, xbtn, out, box["held"])
-
-                new, removed = open_editor(j, cfg, on_tick=push)
-                held = box["held"]
-                cfg.clear()
-                cfg.update(new)  # меняем на месте: main() передаст его в следующую калибровку
-                s = settings_of(cfg)
-                if not s["rumble"]:
-                    j.stop_rumble()
-                    xrumble.set(0, 0)
-                if removed:
-                    print("Руль отключён, жду повторного подключения…\n" + mode_hint(cfg).rstrip())
-                    j = None
-                print("Окно кнопок закрыто.\n" + COMMANDS_HELP)
+            if BRIDGE:
+                if BRIDGE.stop.is_set():  # окно закрывают: выходим, прибрав за собой
+                    break
+                new = BRIDGE.take_new_cfg()  # правки из вкладки «Настройка» — сразу в работу
+                if new is not None:
+                    cfg.clear()
+                    cfg.update(new)  # на месте: main_loop() передаст его в следующую калибровку
+                    s = settings_of(cfg)
+                    if not s["rumble"] and j is not None:
+                        j.stop_rumble()
+                        xrumble.set(0, 0)
 
             for e in pygame.event.get():
+                if BRIDGE and getattr(e, "instance_id", None) == joy_id:
+                    BRIDGE.events.append(e)  # для кнопки «Нажать» во вкладке «Настройка»
                 if e.type == pygame.JOYDEVICEREMOVED and e.instance_id == joy_id:
                     print("\nРуль отключён, жду повторного подключения…\n" + mode_hint(cfg).rstrip())
                     j = None
+                    if BRIDGE:
+                        BRIDGE.snap = None
+                        BRIDGE.set_state("waiting", "Руль отключён — жду, когда его снова подключат")
                 elif e.type == pygame.JOYDEVICEADDED and j is None:
                     cand = find_device(cfg)
                     if cand is not None:
@@ -1098,6 +1232,9 @@ def run(cfg, show=False):
                         joy_id = j.get_instance_id()
                         xrumble = XInputRumble(j)
                         print("Руль снова подключён.")
+                        if BRIDGE:
+                            BRIDGE.set_state("emulating",
+                                             f"Работает: {device_title(j)} → виртуальный Xbox 360")
 
             if j is None:
                 pad.reset()
@@ -1109,6 +1246,9 @@ def run(cfg, show=False):
             out = compute_outputs(j, cfg, s)
             x, rt, lt, want = out
             held = apply_to_pad(pad, xbtn, out, held)
+            if BRIDGE:
+                BRIDGE.publish(j, out)
+                BRIDGE.serve(j)
 
             now = time.perf_counter()
             if s["rumble"] and (rumble["dirty"] or now - last_rumble > 0.8):
@@ -1174,15 +1314,94 @@ def load_cfg():
     return None
 
 
+def calibrate_or_retry(cfg):
+    """Калибровка. В окне её ошибки («не увидел поворота руля» и т. п.) не
+    закрывают программу: пишем причину и ждём «Перекалибровать руль».
+    Вернёт None, если окно закрыли, пока ждали."""
+    while True:
+        try:
+            return calibrate(cfg)
+        except SystemExit as e:
+            if not BRIDGE or not isinstance(e.code, str):
+                raise
+            print("\n" + e.code + "\nНажмите «Перекалибровать руль», чтобы попробовать ещё раз.")
+            BRIDGE.set_state("stopped", "Калибровка не удалась — причина в консоли")
+            while poll_command() != RECALIBRATE:
+                if BRIDGE.stop.is_set():
+                    return None
+                time.sleep(0.05)
+
+
+def main_loop(args):
+    """Калибровка (если нужна) → эмуляция → (R) → калибровка → … без перезапуска."""
+    cfg = load_cfg()
+    need_calibration = args.calibrate or cfg is None
+    while True:
+        if need_calibration:
+            cfg = calibrate_or_retry(cfg)
+            if cfg is None:
+                return
+            if BRIDGE:
+                BRIDGE.show_settings = True  # сразу показать, что получилось, и дать поправить
+        if run(cfg, show=args.show and not BRIDGE) != RECALIBRATE:
+            return
+        need_calibration = True
+
+
+def gui_worker(args):
+    """Рабочий поток окна: весь pygame, калибровка и эмуляция живут здесь."""
+    try:
+        init_sdl()
+        print(f"wheel2pad {VERSION}")
+        main_loop(args)
+        if not BRIDGE.stop.is_set():
+            BRIDGE.set_state("stopped", "Остановлено — причина в консоли")
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            print("\n" + e.code)
+        BRIDGE.set_state("stopped", "Остановлено — причина в консоли")
+    except Exception:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        print("\nЧто-то пошло не так. Сделайте снимок этого окна и отправьте разработчику.")
+        BRIDGE.set_state("error", "Ошибка — подробности в консоли")
+
+
+def attach_console():
+    """У оконного exe нет консоли (sys.stdout — None). Для служебных флагов
+    подключаемся к консоли, из которой его запустили, чтобы вывод был виден."""
+    if sys.stdout is not None or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        if ctypes.windll.kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
+            sys.stdout = sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def show_fatal(text):
+    """Сообщение, которое увидят и без консоли (оконный exe)."""
+    print(text)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, "wheel2pad", 0x10)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser(description="Руль → виртуальный геймпад Xbox 360")
-    ap.add_argument("--calibrate", action="store_true", help="калибровка и назначение кнопок")
-    ap.add_argument("--show", action="store_true", help="показывать значения во время эмуляции")
+    ap.add_argument("--calibrate", action="store_true", help="сначала заново откалибровать руль")
+    ap.add_argument("--console", action="store_true",
+                    help="по-старому, в консоли, без окна (только при запуске через Python)")
+    ap.add_argument("--show", action="store_true", help="--console: строка значений во время эмуляции")
     ap.add_argument("--monitor", action="store_true", help="показать сырые данные руля")
     ap.add_argument("--list", action="store_true", help="список устройств")
-    ap.add_argument("--where", action="store_true", help="путь к python.exe для HidHide")
-    ap.add_argument("--edit", action="store_true",
-                    help="сначала окно кнопок (живой просмотр, переназначение), потом эмуляция")
+    ap.add_argument("--where", action="store_true", help="путь к exe/python.exe для HidHide")
+    ap.add_argument("--edit", action="store_true", help="открыться на вкладке «Настройка кнопок»")
+    attach_console()  # чтобы --help и ошибки флагов были видны из терминала
     args = ap.parse_args()
 
     if args.where:
@@ -1190,33 +1409,25 @@ def main():
         print(path)
         copy_to_clipboard(path)
         return
-
-    init_sdl()
-    if args.list:
-        list_devices()
+    if args.list or args.monitor:
+        init_sdl()
+        if args.list:
+            list_devices()
+        else:
+            monitor()
         return
-    if args.monitor:
-        monitor()
-        return
-
-    cfg = load_cfg()
-    need_calibration = args.calibrate or cfg is None
-    need_editor = args.edit
-    # Цикл нужен для команды R: калибровка → окно кнопок → эмуляция → (R) → …
-    # без перезапуска программы.
-    while True:
-        if need_calibration:
-            cfg = calibrate(cfg)
-            need_editor = True  # сразу показать, что получилось, и дать поправить
-        j = find_device(cfg) if need_editor else None
-        if j is not None:
-            print("\nОткрываю окно кнопок: в нём видно, что приходит с руля и что получит игра,\n"
-                  "и можно переназначить кнопки. Закройте окно — запустится эмуляция.")
-            cfg, _ = open_editor(j, cfg)
-        need_editor = False
-        if run(cfg, show=args.show) != RECALIBRATE:
+    if args.console:
+        if FROZEN:
+            show_fatal("--console работает только при запуске через Python (python wheel2pad.py "
+                       "--console). wheel2pad.exe — оконная программа: запустите его без флагов.")
             return
-        need_calibration = True
+        start_stdin_reader()
+        init_sdl()
+        main_loop(args)
+        return
+
+    import wheel2pad_gui
+    wheel2pad_gui.App(sys.modules[__name__], args).run()
 
 
 if __name__ == "__main__":
@@ -1230,17 +1441,13 @@ if __name__ == "__main__":
         else:
             exit_code = e.code or 0
     except KeyboardInterrupt:
-        # Ctrl+C посреди калибровки: KeyboardInterrupt не наследуется от Exception,
-        # поэтому без этой ветки пользователь увидел бы страшный трейсбек,
-        # а окно exe закрылось бы сразу, не дав ничего прочитать.
+        # Ctrl+C посреди калибровки (--console): KeyboardInterrupt не наследуется
+        # от Exception, поэтому без этой ветки был бы страшный трейсбек.
         print("\nОстановлено.")
         exit_code = 1
     except Exception:  # noqa: BLE001
         import traceback
-        traceback.print_exc()
-        print("\nЧто-то пошло не так. Сфотографируйте это окно и отправьте разработчику.")
+        show_fatal("Что-то пошло не так. Сделайте снимок этого окна и отправьте разработчику.\n\n"
+                   + traceback.format_exc())
         exit_code = 1
-    if FROZEN:
-        # exe запускают двойным щелчком — не даём окну закрыться, пока не прочитали.
-        wait_enter("\nНажмите Enter, чтобы закрыть окно… ")
     sys.exit(exit_code)

@@ -30,12 +30,15 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       # Путь к иконке абсолютный: с --specpath относительные пути PyInstaller ищет от папки build.
-      # --add-data: иконка ещё и для окна кнопок (wheel2pad_gui.py), а не только для самого exe.
+      # --windowed: одно окно программы (wheel2pad_gui.py) без чёрной консоли.
+      # --add-data: иконка для окна, чашка чая (assets\tea.gif) и картинка геймпада (assets\gamepad.png).
       - name: Build exe
         run: >
-          python -m PyInstaller --noconfirm --clean --onefile --console
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
           --name wheel2pad --icon "${{ github.workspace }}\assets\wheel2pad.ico"
           --add-data "${{ github.workspace }}\assets\wheel2pad.ico;assets"
+          --add-data "${{ github.workspace }}\assets\tea.gif;assets"
+          --add-data "${{ github.workspace }}\assets\gamepad.png;assets"
           --collect-all vgamepad --exclude-module vgamepad.lin
           --distpath build/dist --workpath build/work --specpath build wheel2pad.py
 
@@ -51,6 +54,8 @@ jobs:
           $all = pyi-archive_viewer --list --recursive build/dist/wheel2pad.exe
           if (-not ($all | Select-String 'wheel2pad_gui')) { throw 'wheel2pad_gui не попал в exe' }
           if (-not ($toc | Select-String 'tk86t.dll')) { throw 'Tcl/Tk не попали в exe — окно кнопок не откроется' }
+          if (-not ($toc | Select-String 'tea.gif')) { throw 'assets\tea.gif не попал в exe' }
+          if (-not ($toc | Select-String 'gamepad.png')) { throw 'assets\gamepad.png не попал в exe' }
           Write-Host 'Окно кнопок (wheel2pad_gui + Tcl/Tk) внутри exe'
 
       - uses: actions/upload-artifact@v4
