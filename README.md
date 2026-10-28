@@ -9,6 +9,28 @@
 Для руля **Artplays V-1200 Vibro** и похожих USB-рулей, которые игры вроде
 **Forza Horizon 4** не понимают «из коробки».
 
+<!-- Ссылка .../releases/latest/download/... всегда ведёт на exe из последнего релиза -->
+[![Скачать wheel2pad.exe](https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-wheel2pad.exe-2ea043?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/BOBUS2317/wheel2pad/releases/latest/download/wheel2pad.exe)
+
+[![Последняя версия](https://img.shields.io/github/v/release/BOBUS2317/wheel2pad?label=версия&color=2ea043)](https://github.com/BOBUS2317/wheel2pad/releases/latest)
+· один файл, Python не нужен · Windows 10/11 ·
+[все версии и что нового](https://github.com/BOBUS2317/wheel2pad/releases)
+
+</div>
+
+> [!TIP]
+> **Как скачать и запустить**
+> 1. Нажмите зелёную кнопку выше — скачается `wheel2pad.exe`.
+> 2. Положите его в постоянную папку (например, `Документы\Руль`), а не в «Загрузки»:
+>    HidHide запоминает путь к файлу.
+> 3. Запустите двойным щелчком — дальше программа всё подскажет сама.
+>
+> У exe нет цифровой подписи, поэтому Windows может перестраховаться:
+> - **браузер** «файл может быть опасен» → **⋯** → **Сохранить** → **Всё равно сохранить**;
+> - **SmartScreen** «Windows защитила ваш компьютер» → **Подробнее** → **Выполнить в любом случае**.
+
+<div align="center">
+
 [![Build](https://github.com/BOBUS2317/wheel2pad/actions/workflows/build-exe.yml/badge.svg)](https://github.com/BOBUS2317/wheel2pad/actions/workflows/build-exe.yml)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
@@ -130,8 +152,9 @@ D-Input нужен, только если хочется все четыре л�
 ### 1. Скачайте программу
 
 **Вариант А — готовый exe (Python не нужен).**
-Скачайте `wheel2pad.exe` со страницы
-[**Releases**](https://github.com/BOBUS2317/wheel2pad/releases/latest) и положите
+[**Скачайте `wheel2pad.exe`**](https://github.com/BOBUS2317/wheel2pad/releases/latest/download/wheel2pad.exe)
+(последняя версия; все версии — на странице
+[Releases](https://github.com/BOBUS2317/wheel2pad/releases)) и положите
 в постоянную папку (например, `Документы\Руль`) — HidHide запоминает путь к файлу.
 Или соберите сами — см. [Сборка exe](#-сборка-exe).
 
