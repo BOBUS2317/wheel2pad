@@ -30,10 +30,12 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       # Путь к иконке абсолютный: с --specpath относительные пути PyInstaller ищет от папки build.
+      # --add-data: иконка ещё и для окна кнопок (wheel2pad_gui.py), а не только для самого exe.
       - name: Build exe
         run: >
           python -m PyInstaller --noconfirm --clean --onefile --console
           --name wheel2pad --icon "${{ github.workspace }}\assets\wheel2pad.ico"
+          --add-data "${{ github.workspace }}\assets\wheel2pad.ico;assets"
           --collect-all vgamepad --exclude-module vgamepad.lin
           --distpath build/dist --workpath build/work --specpath build wheel2pad.py
 
@@ -45,6 +47,11 @@ jobs:
           $toc = pyi-archive_viewer --list build/dist/wheel2pad.exe
           if (-not ($toc | Select-String 'ViGEmBusSetup_x64.msi')) { throw 'ViGEmBusSetup_x64.msi не попал в exe' }
           Write-Host 'ViGEmBusSetup_x64.msi найден внутри exe'
+          # Окно кнопок: сам модуль (лежит в PYZ — нужен --recursive) и Tcl/Tk для tkinter.
+          $all = pyi-archive_viewer --list --recursive build/dist/wheel2pad.exe
+          if (-not ($all | Select-String 'wheel2pad_gui')) { throw 'wheel2pad_gui не попал в exe' }
+          if (-not ($toc | Select-String 'tk86t.dll')) { throw 'Tcl/Tk не попали в exe — окно кнопок не откроется' }
+          Write-Host 'Окно кнопок (wheel2pad_gui + Tcl/Tk) внутри exe'
 
       - uses: actions/upload-artifact@v4
         with:

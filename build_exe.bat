@@ -13,11 +13,12 @@ echo [1/3] Ставлю PyInstaller...
 ".venv\Scripts\python" -m pip install --upgrade pyinstaller
 if errorlevel 1 goto fail
 
-rem --onefile: всё (Python, pygame, vgamepad с установщиком ViGEmBus) внутри одного exe.
+rem --onefile: всё (Python, pygame, tkinter, vgamepad с установщиком ViGEmBus) внутри одного exe.
+rem --add-data: иконка ещё и для окна кнопок (wheel2pad_gui.py), а не только для самого exe.
 rem Путь к иконке абсолютный: с --specpath относительные пути PyInstaller ищет от папки build.
 echo [2/3] Собираю wheel2pad.exe (1-2 минуты)...
 ".venv\Scripts\python" -m PyInstaller --noconfirm --clean --onefile --console ^
-    --name wheel2pad --icon "%~dp0assets\wheel2pad.ico" ^
+    --name wheel2pad --icon "%~dp0assets\wheel2pad.ico" --add-data "%~dp0assets\wheel2pad.ico;assets" ^
     --collect-all vgamepad --exclude-module vgamepad.lin ^
     --distpath build\dist --workpath build\work --specpath build wheel2pad.py
 if errorlevel 1 goto fail
